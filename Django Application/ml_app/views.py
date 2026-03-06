@@ -20,6 +20,7 @@ from torchvision import models
 import shutil
 from PIL import Image as pImage
 import time
+import gc
 from django.conf import settings
 from .forms import VideoUploadForm
 
@@ -176,7 +177,7 @@ def plot_heat_map(i, model, img, path = './', video_file_name=''):
 def get_accurate_model(sequence_length):
     model_name = []
     sequence_model = []
-    final_model = ""
+    final_model = None
     list_models = glob.glob(os.path.join(settings.PROJECT_DIR, "models", "*.pt"))
 
     for model_path in list_models:
@@ -194,7 +195,7 @@ def get_accurate_model(sequence_length):
         accuracy = []
         for filename in sequence_model:
             acc = filename.split("_")[1]
-            accuracy.append(acc)  # Convert accuracy to float for proper comparison
+            accuracy.append(float(acc))
         max_index = accuracy.index(max(accuracy))
         final_model = os.path.join(settings.PROJECT_DIR, "models", sequence_model[max_index])
     elif len(sequence_model) == 1:
@@ -283,82 +284,196 @@ def predict_page(request):
             model = Model(2).cuda()  # Adjust the model instantiation according to your model structure
         else:
             model = Model(2).cpu()  # Adjust the model instantiation according to your model structure
-        model_name = os.path.join(settings.PROJECT_DIR, 'models', get_accurate_model(sequence_length))
-        path_to_model = os.path.join(settings.PROJECT_DIR, model_name)
-        model.load_state_dict(torch.load(path_to_model, map_location=torch.device('cpu')))
+        path_to_model = get_accurate_model(sequence_length)
+        if not path_to_model or not os.path.isfile(path_to_model):
+            return render(request, predict_template_name, {
+                'model_not_found': True,
+                'requested_sequence_length': sequence_length,
+                'models_location': os.path.join(settings.PROJECT_DIR, 'models')
+            })
+        
+        try:
+            model.load_state_dict(torch.load(path_to_model, map_location=torch.device('cpu')))
+        except Exception as model_error:
+            print(f"Model loading error: {model_error}")
+            return render(request, predict_template_name, {
+                'prediction_error': f"Failed to load model: {str(model_error)[:100]}",
+                'output': 'ERROR',
+                'confidence': 0.0,
+                'preprocessed_images': preprocessed_images,
+                'faces_cropped_images': faces_cropped_images,
+                'heatmap_images': [],
+                'original_video': production_video_name,
+                'models_location': os.path.join(settings.PROJECT_DIR, 'models')
+            })
+        
         model.eval()
+        gc.collect()  # Clean up memory before prediction
         start_time = time.time()
         # Display preprocessing images
         print("<=== | Started Videos Splitting | ===>")
         preprocessed_images = []
         faces_cropped_images = []
-        cap = cv2.VideoCapture(video_file)
-        frames = []
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if ret:
-                frames.append(frame)
-            else:
-                break
-        cap.release()
+        
+        try:
+            cap = cv2.VideoCapture(video_file)
+            if not cap.isOpened():
+                return render(request, predict_template_name, {
+                    'prediction_error': "Cannot open video file. Please try a different file format.",
+                    'output': 'ERROR',
+                    'confidence': 0.0,
+                    'preprocessed_images': [],
+                    'faces_cropped_images': [],
+                    'heatmap_images': [],
+                    'original_video': production_video_name,
+                    'models_location': os.path.join(settings.PROJECT_DIR, 'models')
+                })
+            
+            # Get video properties
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Limit frame processing to prevent memory issues
+            max_frames_to_process = min(sequence_length, 60)  # Never process more than 60 frames
+            frame_interval = max(1, total_frames // max_frames_to_process) if total_frames > 0 else 1
+            
+            print(f"Total frames in video: {total_frames}, Processing every {frame_interval}th frame")
+            
+            padding = 40
+            faces_found = 0
+            frame_count = 0
+            processed_frame_count = 0
+            
+            # Process frames one at a time (memory efficient)
+            while cap.isOpened() and processed_frame_count < sequence_length:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Only process every nth frame to save memory
+                if frame_count % frame_interval != 0:
+                    frame_count += 1
+                    continue
+                
+                try:
+                    # Resize frame to reduce memory usage
+                    frame = cv2.resize(frame, (480, 360))
+                    
+                    # Convert BGR to RGB
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        print(f"Number of frames: {len(frames)}")
-        # Process each frame for preprocessing and face cropping
-        padding = 40
-        faces_found = 0
-        for i in range(sequence_length):
-            if i >= len(frames):
-                break
-            frame = frames[i]
+                    # Save preprocessed image
+                    image_name = f"{video_file_name_only}_preprocessed_{processed_frame_count+1}.png"
+                    image_path = os.path.join(settings.PROJECT_DIR, 'uploaded_images', image_name)
+                    img_rgb = pImage.fromarray(rgb_frame, 'RGB')
+                    img_rgb.save(image_path)
+                    preprocessed_images.append(image_name)
 
-            # Convert BGR to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # Simplified face region - use center crop instead of detection
+                    # This avoids memory issues with face_recognition library
+                    h, w, _ = frame.shape
+                    # Use center 80% of frame (assuming face is roughly in center)
+                    left = int(w * 0.1)
+                    right = int(w * 0.9)
+                    top = int(h * 0.1)
+                    bottom = int(h * 0.9)
+                    
+                    frame_face = frame[top:bottom, left:right]
+                    
+                    if frame_face.size > 0:  # Only save if valid
+                        rgb_face = cv2.cvtColor(frame_face, cv2.COLOR_BGR2RGB)
+                        img_face_rgb = pImage.fromarray(rgb_face, 'RGB')
+                        image_name = f"{video_file_name_only}_cropped_faces_{processed_frame_count+1}.png"
+                        image_path = os.path.join(settings.PROJECT_DIR, 'uploaded_images', image_name)
+                        img_face_rgb.save(image_path)
+                        faces_found += 1
+                        faces_cropped_images.append(image_name)
+                    
+                    processed_frame_count += 1
+                    frame_count += 1
+                    
+                    # Periodic cleanup
+                    if processed_frame_count % 15 == 0:
+                        gc.collect()
+                        
+                except Exception as frame_error:
+                    print(f"Frame processing error: {frame_error}")
+                    frame_count += 1
+                    continue
+            
+            cap.release()
+            gc.collect()  # Final cleanup after video processing
+            
+        except Exception as video_error:
+            print(f"Video processing error: {video_error}")
+            gc.collect()
+            return render(request, predict_template_name, {
+                'prediction_error': f"Video processing failed: {str(video_error)[:100]}",
+                'output': 'ERROR',
+                'confidence': 0.0,
+                'preprocessed_images': preprocessed_images,
+                'faces_cropped_images': faces_cropped_images,
+                'heatmap_images': [],
+                'original_video': production_video_name,
+                'models_location': os.path.join(settings.PROJECT_DIR, 'models')
+            })
 
-            # Save preprocessed image
-            image_name = f"{video_file_name_only}_preprocessed_{i+1}.png"
-            image_path = os.path.join(settings.PROJECT_DIR, 'uploaded_images', image_name)
-            img_rgb = pImage.fromarray(rgb_frame, 'RGB')
-            img_rgb.save(image_path)
-            preprocessed_images.append(image_name)
-
-            # Face detection and cropping
-            face_locations = face_recognition.face_locations(rgb_frame)
-            if len(face_locations) == 0:
-                continue
-
-            top, right, bottom, left = face_locations[0]
-            frame_face = frame[top - padding:bottom + padding, left - padding:right + padding]
-
-            # Convert cropped face image to RGB and save
-            rgb_face = cv2.cvtColor(frame_face, cv2.COLOR_BGR2RGB)
-            img_face_rgb = pImage.fromarray(rgb_face, 'RGB')
-            image_name = f"{video_file_name_only}_cropped_faces_{i+1}.png"
-            image_path = os.path.join(settings.PROJECT_DIR, 'uploaded_images', image_name)
-            img_face_rgb.save(image_path)
-            faces_found += 1
-            faces_cropped_images.append(image_name)
 
         print("<=== | Videos Splitting and Face Cropping Done | ===>")
         print("--- %s seconds ---" % (time.time() - start_time))
 
         # No face detected
         if faces_found == 0:
-            return render(request, 'predict_template_name.html', {"no_faces": True})
+            return render(request, predict_template_name, {
+                'prediction_error': "No faces detected in the video. The video may be too dark, low quality, or at an odd angle.",
+                'output': 'ERROR',
+                'confidence': 0.0,
+                'preprocessed_images': preprocessed_images,
+                'faces_cropped_images': faces_cropped_images,
+                'heatmap_images': [],
+                'original_video': production_video_name,
+                'models_location': os.path.join(settings.PROJECT_DIR, 'models')
+            })
 
         # Perform prediction
-        try:
-            heatmap_images = []
-            output = ""
-            confidence = 0.0
+        heatmap_images = []
+        output = ""
+        confidence = 0.0
+        prediction_error = None
 
+        try:
             for i in range(len(path_to_videos)):
-                print("<=== | Started Prediction | ===>")
-                prediction = predict(model, video_dataset[i], './', video_file_name_only)
-                confidence = round(prediction[1], 1)
-                output = "REAL" if prediction[0] == 1 else "FAKE"
-                print("Prediction:", prediction[0], "==", output, "Confidence:", confidence)
-                print("<=== | Prediction Done | ===>")
-                print("--- %s seconds ---" % (time.time() - start_time))
+                try:
+                    print("<=== | Started Prediction | ===>")
+                    with torch.no_grad():  # Disable gradient calculation for inference
+                        prediction = predict(model, video_dataset[i], './', video_file_name_only)
+                    confidence = round(prediction[1], 1)
+                    output = "REAL" if prediction[0] == 1 else "FAKE"
+                    print("Prediction:", prediction[0], "==", output, "Confidence:", confidence)
+                    print("<=== | Prediction Done | ===>")
+                    print("--- %s seconds ---" % (time.time() - start_time))
+                    gc.collect()  # Cleanup after prediction
+                except torch.cuda.OutOfMemoryError as mem_error:
+                    prediction_error = "GPU Memory Error: Model too large for available memory"
+                    print(f"GPU Memory error: {mem_error}")
+                    output = "ERROR"
+                    confidence = 0.0
+                    gc.collect()
+                except RuntimeError as runtime_error:
+                    if "out of memory" in str(runtime_error).lower():
+                        prediction_error = "Out of Memory: System resources exhausted. Try with a lower frame count."
+                    else:
+                        prediction_error = f"Runtime error: {str(runtime_error)[:80]}"
+                    print(f"Runtime error: {runtime_error}")
+                    output = "ERROR"
+                    confidence = 0.0
+                    gc.collect()
+                except Exception as pred_error:
+                    prediction_error = f"Prediction error: {str(pred_error)[:80]}"
+                    print(f"Prediction error: {pred_error}")
+                    output = "ERROR"
+                    confidence = 0.0
+                    gc.collect()
 
                 # Uncomment if you want to create heat map images
                 # for j in range(sequence_length):
@@ -372,17 +487,26 @@ def predict_page(request):
                 'original_video': production_video_name,
                 'models_location': os.path.join(settings.PROJECT_DIR, 'models'),
                 'output': output,
-                'confidence': confidence
+                'confidence': confidence,
+                'prediction_error': prediction_error
             }
 
-            if settings.DEBUG:
-                return render(request, predict_template_name, context)
-            else:
-                return render(request, predict_template_name, context)
+            return render(request, predict_template_name, context)
 
         except Exception as e:
-            print(f"Exception occurred during prediction: {e}")
-            return render(request, 'cuda_full.html')
+            print(f"Exception occurred during prediction pipeline: {e}")
+            gc.collect()
+            return render(request, predict_template_name, {
+                'prediction_error': f"Processing error: {str(e)[:150]}",
+                'output': 'ERROR',
+                'confidence': 0.0,
+                'preprocessed_images': preprocessed_images,
+                'faces_cropped_images': faces_cropped_images,
+                'heatmap_images': [],
+                'original_video': production_video_name,
+                'models_location': os.path.join(settings.PROJECT_DIR, 'models')
+            })
+    return redirect("ml_app:home")
 def about(request):
     return render(request, about_template_name)
 

@@ -12,36 +12,39 @@
                     <source src="" id="video_source">
                     Your browser does not support HTML5 video.
                 </video>
-                <form class="form" method="POST" enctype="multipart/form-data" name="video-upload" id="video-upload"
-                    class="text-center mt-3">
+                <form class="form text-center mt-3" method="POST" enctype="multipart/form-data" name="video-upload" id="video-upload">
                     {%csrf_token%}
                     <div class="form-group">
-                        <label>{{form.upload_video_file.widget}}</label>
+                        <label for="{{form.upload_video_file.id_for_label}}">{{form.upload_video_file.label}}</label>
                         {{form.upload_video_file}}
-                        <!-- <input type="file" id="{{form.upload_video_file.id_for_label}}" name="{{form.upload_video_file.name}}" /> -->
+                        <small class="form-text text-muted d-block mt-2">Selected: <span id="file-name">None</span></small>
                         {%if form.upload_video_file.errors%}
                         {%for each_error in form.upload_video_file.errors%}
-                        <div class="alert alert-danger mt-1 {{form.upload_video_file.id_for_label}}">
-                            {{each_error}}
+                        <div class="alert alert-danger mt-2">
+                            <strong>Error:</strong> {{each_error}}
                         </div>
                         {%endfor%}
                         {%endif%}
                     </div>
-                    <div class="form-group">
-                        <label for="{{form.sequence_length.id_for_label}}">{{form.sequence_length.label}}: </label><span
-                            id="slider-value"></span>
-                        <input type="number" hidden="hidden" id="{{form.sequence_length.id_for_label}}"
-                            name="{{form.sequence_length.name}}"></input>
-                        <div id='slider'></div>
+                    <div class="form-group mt-4">
+                        <label for="{{form.sequence_length.id_for_label}}">{{form.sequence_length.label}}: </label>
+                        <div class="mt-2">
+                            <span id="slider-value" style="font-weight: bold; font-size: 1.2em;">20</span>
+                        </div>
+                        <input type="number" id="{{form.sequence_length.id_for_label}}"
+                            name="{{form.sequence_length.name}}" style="display: none;">
+                        <small class="form-text text-muted d-block">Drag slider to select number of frames</small>
+                        <div id='slider' style="margin-top: 15px;"></div>
                         {%if form.sequence_length.errors%}
                         {%for each_error in form.sequence_length.errors%}
-                        <div class="alert alert-danger mt-1 {{form.sequence_length.id_for_label}}">
-                            {{each_error}}
+                        <div class="alert alert-danger mt-2">
+                            <strong>Error:</strong> {{each_error}}
                         </div>
                         {%endfor%}
                         {%endif%}
                     </div>
-                    <button id="videoUpload" type="submit" name="submit" class="btn btn-success mt-3 btn-block">Upload</button>
+                    <button id="videoUpload" type="submit" name="submit" class="btn btn-success mt-4 w-100" style="font-weight: bold; padding: 12px; font-size: 1.1em;">Upload & Predict</button>
+                    <div id="upload-status" class="mt-3"></div>
                 </form>
             </div>
         </div>
@@ -60,12 +63,22 @@
             max: sliderSequenceNumbers.length-1,
             slide: function (event, ui) {
                 $('#{{form.sequence_length.id_for_label}}').val(sliderSequenceNumbers[ui.value]);
-                $('#{{form.sequence_length.id_for_label}}').val(sliderSequenceNumbers[ui.value]);
                 $('#slider-value').html(sliderSequenceNumbers[ui.value]);
             }
         });
         $("#{{form.sequence_length.id_for_label}}").val(sliderSequenceNumbers[$("#slider").slider("value")]);
         $('#slider-value').html(sliderSequenceNumbers[$("#slider").slider("value")]);
+        
+        // File upload feedback
+        $('#{{form.upload_video_file.id_for_label}}').on('change', function() {
+            var fileName = $(this).val().split('\\').pop();
+            $('#file-name').text(fileName || 'None');
+        });
+        
+        // Form submission feedback
+        $('#video-upload').on('submit', function() {
+            $('#upload-status').html('<div class="alert alert-info"><strong>Processing...</strong> Uploading video and running deepfake detection. This may take a moment.</div>');
+        });
     });
 </script>
 {%endblock%}

@@ -23,6 +23,12 @@ DEBUG = True
 # Change and set this to correct IP/Domain
 ALLOWED_HOSTS = ["*"]
 
+# CSRF trusted origins for GitHub Codespaces and local development
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.app.github.dev",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 
 # Application definition
 

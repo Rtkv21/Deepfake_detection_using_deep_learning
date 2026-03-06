@@ -1,47 +1,127 @@
 {% extends 'base.html' %}
 {% load static %}
 {%block content%}
-{%if no_faces%}
-<div class="container">
-  <div class="logo text-center mb-3"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
+{%if prediction_error%}
+<div class="container mt-5">
+  <div class="logo text-center mb-4"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
   <hr />
-  <div class="alert alert-danger">
-    No faces detected. Cannot process the video.
+  <div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <h4 class="alert-heading">⚠️ Prediction Error</h4>
+    <p><strong>{{prediction_error}}</strong></p>
+    <p>The system encountered an error while processing your video. This may be due to memory limitations or a corrupted input file.</p>
+    <p><small>Try with a shorter video or lower frame count.</small></p>
+    <hr>
+    <a href="{% url 'ml_app:home' %}" class="btn btn-primary">Try Again</a>
+  </div>
+</div>
+{%elif output == "ERROR"%}
+<div class="container mt-5">
+  <div class="logo text-center mb-4"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
+  <hr />
+  <div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <h4 class="alert-heading">❌ Processing Failed</h4>
+    <p>The AI model encountered an error during prediction.</p>
+    <p><small>This may be a temporary issue. Please try again with a different video or settings.</small></p>
+    <hr>
+    <a href="{% url 'ml_app:home' %}" class="btn btn-primary">Try Another Video</a>
+  </div>
+</div>
+{%elif model_not_found%}
+<div class="container mt-5">
+  <div class="logo text-center mb-4"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
+  <hr />
+  <div class="alert alert-danger alert-dismissible fade show" role="alert">
+    <h4 class="alert-heading">Model Not Found</h4>
+    <p>No trained model found for sequence length <strong>{{requested_sequence_length}}</strong> frames.</p>
+    <p>Available sequence lengths: 10, 20, 40, 60, 80, 100 frames</p>
+    <p>Location: <code>{{models_location}}</code></p>
+    <hr>
+    <a href="{% url 'ml_app:home' %}" class="btn btn-primary">Back to Home</a>
+  </div>
+</div>
+{%elif no_faces%}
+<div class="container mt-5">
+  <div class="logo text-center mb-4"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
+  <hr />
+  <div class="alert alert-warning alert-dismissible fade show" role="alert">
+    <h4 class="alert-heading">No Faces Detected</h4>
+    <p>The video could not be processed because no faces were detected in the frames.</p>
+    <p>Please try with a different video that contains clear face footage.</p>
+    <hr>
+    <a href="{% url 'ml_app:home' %}" class="btn btn-primary">Try Another Video</a>
   </div>
 </div>
 {%else%}
-<div class="container">
-  <div class="logo text-center mb-3"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
+<div class="container mt-4">
+  <div class="logo text-center mb-4"><img src="{% static 'images/logo1.png'%}" alt="Logo" ></div>
   <hr />
 
-  <h3>Frames Split</h3>
-  <div id="preprocessed_images" class="col-12 mt-4 mb-2">
-    {% for each_image in preprocessed_images %}
-    <img src="{%static each_image%}" class="preprocess" width=auto height="250" />
-    {%endfor%}
+  <div class="row mb-5">
+    <div class="col-12">
+      <h3 class="mb-4">📹 Frames Split (Video Processing)</h3>
+      <div id="preprocessed_images" class="row">
+        {% for each_image in preprocessed_images %}
+        <div class="col-md-3 col-sm-4 col-xs-6 mb-3">
+          <img src="{%static each_image%}" class="img-fluid border rounded" alt="Preprocessed Frame" />
+        </div>
+        {%endfor%}
+      </div>
+    </div>
   </div>
 
-
-  <h3>Face Cropped Frames</h3>
-  <div id="faces_images" class="col-12 mb-2">
-    {% for each_image in faces_cropped_images %}
-    <img src="{%static each_image%}" class="faces" width=auto height="150" />
-    {%endfor%}
+  <div class="row mb-5">
+    <div class="col-12">
+      <h3 class="mb-4">👤 Face Cropped Frames</h3>
+      <div id="faces_images" class="row">
+        {% for each_image in faces_cropped_images %}
+        <div class="col-md-2 col-sm-3 col-xs-4 mb-3">
+          <img src="{%static each_image%}" class="img-fluid border rounded" alt="Cropped Face" />
+        </div>
+        {%endfor%}
+      </div>
+    </div>
   </div>
 
-  <div class="result text-center">
-    <h3>Play to see Result</h3>
-    <video height="320" width="640" id="predict-media" controls>
-      <source src="{{MEDIA_URL}}{{original_video}}" type="video/mp4" codecs="avc1.4d002a" />
-    </video>
-    {%if output == "REAL" %}
-    <h4 class="mx-auto">Result: <span style="color:green">{{output}}</span>
-      <img src="{% static 'images/thumpup.png'%}" alt="real" height="100px" width=auto>
-      {%else%}
-      <h4 class="mx-auto">Result: <span style="color:red">{{output}}</span>
-        <img src="{% static 'images/thumpdown.png'%}" alt="fake" height="100px" width=auto >
-      {%endif%}
+  <div class="row">
+    <div class="col-12">
+      <div class="result text-center bg-light p-5 rounded">
+        <h3 class="mb-4">🎯 Detection Result</h3>
+        <video height="400" width="640" id="predict-media" controls class="mb-4 border rounded" style="max-width: 100%; background: black;">
+          <source src="{{MEDIA_URL}}{{original_video}}" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        
+        <div class="result-box p-4 rounded" style="background: {% if output == 'REAL' %}#d4edda{% else %}#f8d7da{% endif %};">
+          {%if output == "REAL" %}
+          <h2 class="mb-3">
+            <span style="color:#155724; font-weight: bold;">✓ {{output}}</span>
+            <img src="{% static 'images/thumpup.png'%}" alt="real" height="80px" style="margin-left: 15px;">
+          </h2>
+          <p class="lead" style="color:#155724;">
+            <strong>Confidence: {{confidence}}%</strong><br>
+            <small>This video appears to be authentic.</small>
+          </p>
+          {%else%}
+          <h2 class="mb-3">
+            <span style="color:#721c24; font-weight: bold;">✗ {{output}}</span>
+            <img src="{% static 'images/thumpdown.png'%}" alt="fake" height="80px" style="margin-left: 15px;">
+          </h2>
+          <p class="lead" style="color:#721c24;">
+            <strong>Confidence: {{confidence}}%</strong><br>
+            <small>This video appears to be a deepfake.</small>
+          </p>
+          {%endif%}
+        </div>
+        
+        <div class="mt-4">
+          <a href="{% url 'ml_app:home' %}" class="btn btn-primary btn-lg">
+            Analyze Another Video
+          </a>
+        </div>
+      </div>
+    </div>
   </div>
+</div>
 <!--
   <h3>Heat Maps</h3>
   <div id="heatmap_images" class="col-12 mb-4 ">
